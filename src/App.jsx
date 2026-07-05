@@ -27,6 +27,7 @@ import {
   Rotate3d,
   Save,
   Scale3d,
+  ScrollText,
   Search,
   Star,
   Undo2,
@@ -41,6 +42,32 @@ import { composeLogoTexture } from './lib/textureComposer.js';
 const api = window.dffViewer;
 const defaultAccentColor = '#2df5c6';
 const favoritesStorageKey = 'skinViewerFavorites';
+const discordUrl = 'https://discord.gg/4BHbfSBBES';
+const githubUrl = 'https://github.com/Tokyotears6642/dff-skin-viewer';
+const changelogEntries = [
+  {
+    version: '0.1.1',
+    date: '2026-07-05',
+    items: [
+      'Botones directos a Discord y al repositorio de GitHub en la barra superior.',
+      'Popup de changelog dentro de la app.',
+      'Badge en la barra superior cuando GitHub Releases informa un update disponible.',
+      'Iconos sociales incluidos en el build y rutas corregidas para Electron empaquetado.',
+      'Verificacion del icono del ejecutable usando el logo de la app.'
+    ]
+  },
+  {
+    version: '0.1.0',
+    date: '2026-07-05',
+    items: [
+      'Viewer 3D para DFF/TXD con camara orbital, zoom, wireframe y encuadre.',
+      'Inspector con materiales, texturas, bones, IFP y pesos de DFF/TXD.',
+      'Reemplazo de texturas y guardado del TXD con backup automatico.',
+      'Editor de logo sobre material con preview en tiempo real.',
+      'Favoritos, notificaciones internas, tema con color configurable e icono de app.'
+    ]
+  }
+];
 const defaultLogoOverlay = {
   imageDataUrl: '',
   name: '',
@@ -140,6 +167,21 @@ function IconButton({ icon: Icon, label, title, active, disabled, onClick }) {
       onClick={onClick}
     >
       <Icon size={17} strokeWidth={2.1} />
+    </button>
+  );
+}
+
+function ImageIconButton({ src, label, title, disabled, onClick }) {
+  return (
+    <button
+      className="icon-button image-icon-button"
+      type="button"
+      title={title ?? label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <img src={src} alt="" draggable="false" />
     </button>
   );
 }
@@ -1097,7 +1139,11 @@ function TopToolbar({
   onResetCamera,
   onFitView,
   onToggleWireframe,
-  onOpenHelp
+  onOpenHelp,
+  onOpenDiscord,
+  onOpenGithub,
+  onOpenChangelog,
+  updateRelease
 }) {
   return (
     <header className="topbar">
@@ -1114,9 +1160,21 @@ function TopToolbar({
         <IconButton icon={Maximize2} label="Encuadrar modelo" disabled={!selectedModel} onClick={onFitView} />
         <IconButton icon={Eye} label="Wireframe" active={wireframe} disabled={!selectedModel} onClick={onToggleWireframe} />
         <IconButton icon={CircleHelp} label="Ayuda" onClick={onOpenHelp} />
+        <ImageIconButton src="./discord.png" label="Discord" title="Abrir Discord" onClick={onOpenDiscord} />
+        <ImageIconButton src="./github.png" label="GitHub" title="Abrir repositorio en GitHub" onClick={onOpenGithub} />
+        <button className="toolbar-button is-compact" type="button" onClick={onOpenChangelog}>
+          <ScrollText size={15} />
+          <span>Changelog</span>
+        </button>
       </div>
 
       <div className="toolbar-status">
+        {updateRelease?.available && (
+          <span className={`release-badge is-${updateRelease.status}`}>
+            {updateRelease.status === 'downloaded' ? 'Update listo' : 'Nuevo release'}
+            {updateRelease.version ? ` v${updateRelease.version}` : ''}
+          </span>
+        )}
         {selectedModel ? (
           <>
             <span className="status-dot" />
@@ -1203,6 +1261,67 @@ function HelpDialog({ open, onClose }) {
   );
 }
 
+function ChangelogDialog({ open, onClose }) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section className="help-dialog changelog-dialog" role="dialog" aria-modal="true" aria-labelledby="changelog-title">
+        <div className="help-dialog-header">
+          <div>
+            <h2 id="changelog-title">Changelog</h2>
+            <p>Ultimos cambios de Skin Viewer</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Cerrar changelog" onClick={onClose}>
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="changelog-body">
+          {changelogEntries.map((entry) => (
+            <article key={entry.version} className="changelog-entry">
+              <header>
+                <strong>v{entry.version}</strong>
+                <span>{entry.date}</span>
+              </header>
+              <ul>
+                {entry.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ViewportOverlay({ selectedModel, loadState }) {
   if (loadState.status === 'error') {
     return (
@@ -1247,6 +1366,7 @@ export default function App() {
   const [wireframe, setWireframe] = useState(false);
   const [showBones, setShowBones] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showChangelog, setShowChangelog] = useState(false);
   const [transformEnabled, setTransformEnabled] = useState(false);
   const [transformMode, setTransformMode] = useState('rotate');
   const [logoOverlay, setLogoOverlay] = useState(defaultLogoOverlay);
@@ -1272,6 +1392,7 @@ export default function App() {
   const [warning, setWarning] = useState('');
   const [loadState, setLoadState] = useState({ status: 'idle', message: '' });
   const [notifications, setNotifications] = useState([]);
+  const [updateRelease, setUpdateRelease] = useState(null);
 
   const catalog = useMemo(() => buildCatalog(files), [files]);
   const filteredModels = useMemo(() => filterModels(catalog.models, query), [catalog.models, query]);
@@ -1329,7 +1450,18 @@ export default function App() {
 
     return api.onUpdateStatus((status) => {
       if (!status || status.type === 'idle' || status.type === 'checking') {
+        if (status?.type === 'idle') {
+          setUpdateRelease(null);
+        }
         return;
+      }
+
+      if (status.type === 'available' || status.type === 'downloaded') {
+        setUpdateRelease({
+          available: true,
+          status: status.type,
+          version: status.version || ''
+        });
       }
 
       pushNotification({
@@ -2040,6 +2172,18 @@ export default function App() {
     setColorSaved(true);
   }, [pendingAccentColor]);
 
+  const openExternalUrl = useCallback(async (targetUrl) => {
+    try {
+      await api?.openExternalUrl?.(targetUrl);
+    } catch (error) {
+      pushNotification({
+        type: 'error',
+        title: 'No se pudo abrir el enlace',
+        message: error.message
+      });
+    }
+  }, [pushNotification]);
+
   return (
     <div className="app-shell">
       <TopToolbar
@@ -2053,6 +2197,10 @@ export default function App() {
         onFitView={() => viewportRef.current?.fitView()}
         onToggleWireframe={() => setWireframe((value) => !value)}
         onOpenHelp={() => setShowHelp(true)}
+        onOpenDiscord={() => openExternalUrl(discordUrl)}
+        onOpenGithub={() => openExternalUrl(githubUrl)}
+        onOpenChangelog={() => setShowChangelog(true)}
+        updateRelease={updateRelease}
       />
 
       <main className="workspace">
@@ -2146,6 +2294,7 @@ export default function App() {
       </main>
       <ToastStack notifications={notifications} onDismiss={dismissNotification} />
       <HelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
+      <ChangelogDialog open={showChangelog} onClose={() => setShowChangelog(false)} />
     </div>
   );
 }

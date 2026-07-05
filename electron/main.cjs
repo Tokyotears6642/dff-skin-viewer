@@ -33,6 +33,10 @@ const rwChunks = {
   texDictionary: 22
 };
 const appUserModelId = 'com.local.dffskinviewer';
+const allowedExternalUrls = new Set([
+  'https://discord.gg/4BHbfSBBES',
+  'https://github.com/Tokyotears6642/dff-skin-viewer'
+]);
 let mainWindow = null;
 
 function normalizeRoot(folderPath) {
@@ -109,6 +113,7 @@ function setupAutoUpdater() {
     sendUpdateStatus({
       type: 'available',
       title: 'Actualizacion disponible',
+      version: info.version || '',
       message: info.version ? `Version ${info.version}` : 'Descargando nueva version.'
     });
   });
@@ -119,6 +124,7 @@ function setupAutoUpdater() {
     sendUpdateStatus({
       type: 'downloaded',
       title: 'Actualizacion lista',
+      version: info.version || '',
       message: info.version ? `Version ${info.version}. Se instalara al cerrar la app.` : 'Se instalara al cerrar la app.'
     });
   });
@@ -524,6 +530,25 @@ async function runSmokeCapture(window) {
     }
   }
 
+  if (smokeScenario === 'changelog') {
+    interactionState = await window.webContents.executeJavaScript(`
+      new Promise((resolve) => {
+        const button = [...document.querySelectorAll('button')]
+          .find((candidate) => candidate.textContent.includes('Changelog'));
+        const clicked = Boolean(button);
+        if (button) button.click();
+        setTimeout(() => {
+          resolve({
+            clicked,
+            dialogOpen: Boolean(document.querySelector('.changelog-dialog')),
+            socialIconsReady: [...document.querySelectorAll('.image-icon-button img')]
+              .every((image) => image.complete && image.naturalWidth > 0)
+          });
+        }, 350);
+      });
+    `);
+  }
+
   await window.webContents.executeJavaScript(`
     new Promise((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 900)));
@@ -538,7 +563,13 @@ async function runSmokeCapture(window) {
       modelRows: document.querySelectorAll('.model-row').length,
       toolbarText: document.querySelector('.toolbar-status')?.textContent?.trim() ?? '',
       inspectorText: document.querySelector('.inspector')?.textContent?.trim() ?? '',
-      toastText: document.querySelector('.app-toast')?.textContent?.trim() ?? ''
+      toastText: document.querySelector('.app-toast')?.textContent?.trim() ?? '',
+      hasChangelogButton: [...document.querySelectorAll('button')]
+        .some((candidate) => candidate.textContent.includes('Changelog')),
+      hasChangelogDialog: Boolean(document.querySelector('.changelog-dialog')),
+      socialIconsReady: [...document.querySelectorAll('.image-icon-button img')]
+        .every((image) => image.complete && image.naturalWidth > 0),
+      updateBadgeText: document.querySelector('.release-badge')?.textContent?.trim() ?? ''
     })
   `);
 
@@ -677,6 +708,15 @@ ipcMain.handle('path:open', async (_event, targetPath) => {
   if (message) {
     throw new Error(message);
   }
+  return true;
+});
+
+ipcMain.handle('url:open', async (_event, targetUrl) => {
+  if (!allowedExternalUrls.has(targetUrl)) {
+    throw new Error('URL externa no permitida.');
+  }
+
+  await shell.openExternal(targetUrl);
   return true;
 });
 

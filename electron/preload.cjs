@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('dffViewer', {
   saveTxdTextures: ({ txdPath, textures }) => ipcRenderer.invoke('file:saveTxdTextures', { txdPath, textures }),
   addFavoriteSkin: ({ dffPath, txdPath, displayName }) => ipcRenderer.invoke('favorites:add', { dffPath, txdPath, displayName }),
   openPath: (targetPath) => ipcRenderer.invoke('path:open', targetPath),
+  openExternalUrl: (targetUrl) => ipcRenderer.invoke('url:open', targetUrl),
   onUpdateStatus: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('updater:status', listener);

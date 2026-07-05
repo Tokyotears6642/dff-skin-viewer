@@ -106,10 +106,21 @@ button {
   font-weight: 600;
 }
 
+.toolbar-button.is-compact {
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 .icon-button {
   width: 33px;
   height: 33px;
   padding: 0;
+}
+
+.image-icon-button img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
 }
 
 .toolbar-button:hover:not(:disabled),
@@ -158,6 +169,27 @@ button {
   margin-left: auto;
   color: var(--muted);
   font-size: 12px;
+}
+
+.release-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(242, 181, 75, 0.42);
+  border-radius: 999px;
+  background: rgba(242, 181, 75, 0.1);
+  color: #ffd996;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.release-badge.is-downloaded {
+  border-color: rgba(var(--accent-rgb), 0.46);
+  background: rgba(var(--accent-rgb), 0.11);
+  color: var(--accent);
 }
 
 .toolbar-status strong {
@@ -1479,6 +1511,55 @@ button {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.changelog-dialog {
+  width: min(560px, 100%);
+}
+
+.changelog-body {
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  max-height: calc(100vh - 148px);
+  padding: 16px;
+}
+
+.changelog-entry {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.changelog-entry header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.changelog-entry strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.changelog-entry span {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.changelog-entry ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @media (max-width: 1120px) {
