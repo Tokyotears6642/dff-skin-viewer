@@ -1,0 +1,92 @@
+{
+  "name": "dff-skin-viewer",
+  "version": "0.1.0",
+  "description": "Skin Viewer by Tokyo tears for GTA RenderWare DFF models with TXD textures.",
+  "author": "Tokyo tears",
+  "main": "electron/main.cjs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "dist:win": "node scripts/patch-portable-icon-template.cjs && npm run build && electron-builder --win",
+    "dist:win:portable": "node scripts/patch-portable-icon-template.cjs && npm run build && electron-builder --win portable",
+    "dist:win:publish": "node scripts/patch-portable-icon-template.cjs && npm run build && electron-builder --win --publish always",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "dff-loader": "^1.0.1",
+    "electron-updater": "^6.8.9",
+    "lucide-react": "^0.468.0",
+    "three": "^0.170.0",
+    "vite": "^5.4.21"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.39.2",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.local.dffskinviewer",
+    "productName": "Skin Viewer by Tokyo tears",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "logo.png",
+      "icon.ico",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "logo.png",
+        "to": "logo.png"
+      },
+      {
+        "from": "icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Skin-Viewer-by-Tokyo-tears-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Skin-Viewer-by-Tokyo-tears-Portable-${version}-${arch}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Tokyotears6642",
+      "repo": "dff-skin-viewer",
+      "releaseType": "release"
+    }
+  }
+}

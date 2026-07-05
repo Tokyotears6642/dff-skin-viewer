@@ -1,0 +1,24 @@
+node_modules/
+dist/
+release/
+artifacts/
+favorites/
+.vscode/
+
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+.env
+.env.*
+
+*.backup-*.txd
+*.backup-*.dff
+*.dff
+*.txd
+*.ifp
+
+bajar de peso/
+discord.png
