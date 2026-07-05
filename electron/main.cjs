@@ -159,6 +159,23 @@ function sanitizeFileName(value, fallback = 'skin-viewer') {
   return cleaned || fallback;
 }
 
+function escapeXml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function sanitizeLuaString(value = '') {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function escapeMaxScriptString(value = '') {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function dataUrlToBuffer(dataUrl, expectedMime = '') {
   const match = typeof dataUrl === 'string' ? dataUrl.match(/^data:([^;]+);base64,(.+)$/) : null;
   if (!match || (expectedMime && match[1] !== expectedMime)) {
@@ -169,6 +186,26 @@ function dataUrlToBuffer(dataUrl, expectedMime = '') {
     buffer: Buffer.from(match[2], 'base64'),
     mime: match[1]
   };
+}
+
+function bytesToBuffer(bytes) {
+  if (Buffer.isBuffer(bytes)) {
+    return bytes;
+  }
+
+  if (bytes instanceof ArrayBuffer) {
+    return Buffer.from(bytes);
+  }
+
+  if (ArrayBuffer.isView(bytes)) {
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+
+  if (Array.isArray(bytes)) {
+    return Buffer.from(bytes);
+  }
+
+  throw new Error('Datos binarios invalidos.');
 }
 
 function createRwChunk(type, payload) {
@@ -301,7 +338,7 @@ async function scanFolder(folderPath) {
       }
 
       const ext = path.extname(entry.name).toLowerCase();
-      if (ext !== '.dff' && ext !== '.txd' && ext !== '.ifp') {
+      if (!['.dff', '.txd', '.ifp', '.col', '.img', '.ide', '.ipl'].includes(ext)) {
         continue;
       }
 
@@ -631,6 +668,78 @@ ipcMain.handle('file:readBinary', async (_event, filePath) => {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 });
 
+function parseImgVer2Directory(buffer) {
+  if (buffer.length < 8 || buffer.subarray(0, 4).toString('ascii') !== 'VER2') {
+    throw new Error('Solo se soportan IMG VER2 por ahora.');
+  }
+
+  const entryCount = buffer.readUInt32LE(4);
+  const entries = [];
+  let offset = 8;
+  for (let index = 0; index < entryCount && offset + 32 <= buffer.length; index += 1) {
+    const sectorOffset = buffer.readUInt32LE(offset);
+    const sectorSize = buffer.readUInt16LE(offset + 4);
+    const name = buffer.subarray(offset + 8, offset + 32).toString('ascii').replace(/\0.+$/g, '').trim();
+    entries.push({
+      index,
+      name,
+      offset: sectorOffset * 2048,
+      size: sectorSize * 2048,
+      ext: path.extname(name).toLowerCase()
+    });
+    offset += 32;
+  }
+  return entries;
+}
+
+ipcMain.handle('img:readArchive', async (_event, imgPath) => {
+  if (!imgPath || !canReadPath(imgPath)) {
+    throw new Error('El IMG esta fuera de la carpeta seleccionada.');
+  }
+
+  const buffer = await fs.readFile(imgPath);
+  const entries = parseImgVer2Directory(buffer);
+  return {
+    imgPath: path.resolve(imgPath),
+    entryCount: entries.length,
+    entries
+  };
+});
+
+ipcMain.handle('img:extractArchive', async (event, { imgPath, entries }) => {
+  if (!imgPath || !canReadPath(imgPath)) {
+    throw new Error('El IMG esta fuera de la carpeta seleccionada.');
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, { title: 'Elegir carpeta para extraer IMG', properties: ['openDirectory', 'createDirectory'] })
+    : await dialog.showOpenDialog({ title: 'Elegir carpeta para extraer IMG', properties: ['openDirectory', 'createDirectory'] });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const buffer = await fs.readFile(imgPath);
+  const directory = parseImgVer2Directory(buffer);
+  const selectedNames = new Set((Array.isArray(entries) && entries.length > 0 ? entries : directory).map((entry) => entry.name));
+  const outputFolder = path.join(result.filePaths[0], `${sanitizeFileName(path.basename(imgPath, path.extname(imgPath)), 'img')}_extract`);
+  await fs.mkdir(outputFolder, { recursive: true });
+  let extracted = 0;
+
+  for (const entry of directory) {
+    if (!selectedNames.has(entry.name)) {
+      continue;
+    }
+    const safeName = sanitizeFileName(entry.name, `entry_${entry.index}`);
+    const slice = buffer.subarray(entry.offset, Math.min(buffer.length, entry.offset + entry.size));
+    await fs.writeFile(path.join(outputFolder, safeName), slice);
+    extracted += 1;
+  }
+
+  return { folderPath: outputFolder, count: extracted };
+});
+
 ipcMain.handle('file:savePng', async (event, { dataUrl, suggestedName }) => {
   const { buffer } = dataUrlToBuffer(dataUrl, 'image/png');
   const parentWindow = BrowserWindow.fromWebContents(event.sender);
@@ -649,6 +758,131 @@ ipcMain.handle('file:savePng', async (event, { dataUrl, suggestedName }) => {
 
   await fs.writeFile(result.filePath, buffer);
   return result.filePath;
+});
+
+ipcMain.handle('file:saveText', async (event, { content, suggestedName, filters }) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Guardar reporte',
+    defaultPath: sanitizeFileName(suggestedName, 'skin-viewer-report'),
+    filters: Array.isArray(filters) && filters.length > 0
+      ? filters
+      : [{ name: 'Texto', extensions: ['txt'] }]
+  };
+  const result = parentWindow
+    ? await dialog.showSaveDialog(parentWindow, dialogOptions)
+    : await dialog.showSaveDialog(dialogOptions);
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  await fs.writeFile(result.filePath, String(content ?? ''), 'utf8');
+  return result.filePath;
+});
+
+ipcMain.handle('file:saveBinary', async (event, { bytes, suggestedName, filters }) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Guardar archivo',
+    defaultPath: sanitizeFileName(suggestedName, 'skin-viewer-export'),
+    filters: Array.isArray(filters) && filters.length > 0
+      ? filters
+      : [{ name: 'Archivo', extensions: ['bin'] }]
+  };
+  const result = parentWindow
+    ? await dialog.showSaveDialog(parentWindow, dialogOptions)
+    : await dialog.showSaveDialog(dialogOptions);
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  await fs.writeFile(result.filePath, bytesToBuffer(bytes));
+  return result.filePath;
+});
+
+ipcMain.handle('textures:exportFolder', async (event, { displayName, textures }) => {
+  const usableTextures = Array.isArray(textures)
+    ? textures.filter((texture) => texture?.name && texture?.dataUrl)
+    : [];
+
+  if (usableTextures.length === 0) {
+    throw new Error('No hay texturas para exportar.');
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Elegir carpeta para exportar texturas',
+    properties: ['openDirectory', 'createDirectory']
+  };
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const targetFolder = path.join(result.filePaths[0], `${sanitizeFileName(displayName, 'skin')}_textures`);
+  await fs.mkdir(targetFolder, { recursive: true });
+
+  for (const texture of usableTextures) {
+    const { buffer } = dataUrlToBuffer(texture.dataUrl, 'image/png');
+    await fs.writeFile(path.join(targetFolder, `${sanitizeFileName(texture.name, 'texture')}.png`), buffer);
+  }
+
+  return {
+    folderPath: targetFolder,
+    count: usableTextures.length
+  };
+});
+
+ipcMain.handle('textures:importFolder', async (event) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Elegir carpeta con texturas PNG/JPG',
+    properties: ['openDirectory']
+  };
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const folderPath = result.filePaths[0];
+  const entries = await fs.readdir(folderPath, { withFileTypes: true });
+  const textures = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const ext = path.extname(entry.name).toLowerCase();
+    if (!['.png', '.jpg', '.jpeg'].includes(ext)) {
+      continue;
+    }
+
+    const filePath = path.join(folderPath, entry.name);
+    const buffer = await fs.readFile(filePath);
+    const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+    const image = nativeImage.createFromBuffer(buffer);
+    const size = image.getSize();
+    textures.push({
+      name: path.basename(entry.name, ext),
+      fileName: entry.name,
+      dataUrl: `data:${mime};base64,${buffer.toString('base64')}`,
+      width: size.width,
+      height: size.height
+    });
+  }
+
+  return {
+    folderPath,
+    textures
+  };
 });
 
 ipcMain.handle('file:saveTxdTextures', async (_event, { txdPath, textures }) => {
@@ -670,6 +904,283 @@ ipcMain.handle('file:saveTxdTextures', async (_event, { txdPath, textures }) => 
     backupPath,
     size: nextStats.size,
     modifiedAt: nextStats.mtimeMs
+  };
+});
+
+ipcMain.handle('pipeline:createPackage', async (event, { dffPath, txdPath, displayName, reportJson }) => {
+  if (!dffPath || !canReadPath(dffPath)) {
+    throw new Error('El DFF esta fuera de la carpeta seleccionada.');
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Elegir carpeta para paquete 3ds Max / Blender',
+    properties: ['openDirectory', 'createDirectory']
+  };
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const baseName = sanitizeFileName(displayName || path.basename(dffPath, path.extname(dffPath)), 'skin');
+  const packagePath = path.join(result.filePaths[0], `${baseName}_pipeline_package`);
+  const sourcePath = path.join(packagePath, 'source');
+  await fs.mkdir(sourcePath, { recursive: true });
+  await fs.copyFile(path.resolve(dffPath), path.join(sourcePath, `${baseName}.dff`));
+
+  if (txdPath && canReadPath(txdPath)) {
+    await fs.copyFile(path.resolve(txdPath), path.join(sourcePath, `${baseName}.txd`));
+  }
+
+  const checklist = [
+    `Skin: ${baseName}`,
+    '',
+    '3ds Max / GTA Tools checklist',
+    '- Importar el DFF con GTA Tools/Kam compatible.',
+    '- Verificar root hierarchy, HAnim/Skin PLG y nombres de bones.',
+    '- Mantener nombres de materiales iguales a diffuse maps.',
+    '- Revisar UV1/UV2, vertex color y alpha antes de exportar.',
+    '- Exportar DFF con el mismo nombre base que el TXD.',
+    '',
+    'Blender checklist',
+    '- Si se usa GLB/OBJ como referencia, conservar escala y orientacion.',
+    '- Revisar transparencias, triangulacion y nombres de texturas.',
+    '- Volver a DFF usando un conversor probado antes de publicar.',
+    '',
+    'SA-MP/MTA checklist',
+    '- Probar idle/walk IFP para detectar deformaciones.',
+    '- Reducir texturas grandes antes de distribuir packs pesados.',
+    '- Mantener backups de DFF/TXD originales.'
+  ].join('\n');
+
+  const blenderScript = [
+    'import bpy',
+    'from pathlib import Path',
+    '',
+    'root = Path(__file__).resolve().parent',
+    'glb = root / "export.glb"',
+    'if glb.exists():',
+    '    bpy.ops.import_scene.gltf(filepath=str(glb))',
+    'else:',
+    '    print("Coloca export.glb junto a este script y vuelve a ejecutarlo.")'
+  ].join('\n');
+
+  await fs.writeFile(path.join(packagePath, 'checklist.txt'), checklist, 'utf8');
+  await fs.writeFile(path.join(packagePath, 'blender_import_glb.py'), blenderScript, 'utf8');
+  if (reportJson) {
+    await fs.writeFile(path.join(packagePath, 'pipeline-report.json'), String(reportJson), 'utf8');
+  }
+
+  return { packagePath };
+});
+
+ipcMain.handle('bridge:createDffRoundtrip', async (event, { dffPath, txdPath, displayName, glbBytes, gtaToolsPath }) => {
+  if (!dffPath || !canReadPath(dffPath)) {
+    throw new Error('El DFF esta fuera de la carpeta seleccionada.');
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Elegir carpeta para DFF Roundtrip Bridge',
+    properties: ['openDirectory', 'createDirectory']
+  };
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const detectedGtaTools = fsSync.existsSync('C:\\Users\\House\\Downloads\\Compressed\\GTA-Tools-main')
+    ? 'C:\\Users\\House\\Downloads\\Compressed\\GTA-Tools-main'
+    : '';
+  const toolsRoot = gtaToolsPath || detectedGtaTools;
+  const baseName = sanitizeFileName(displayName || path.basename(dffPath, path.extname(dffPath)), 'skin').replace(/\s+/g, '_');
+  const bridgePath = path.join(result.filePaths[0], `${baseName}_dff_roundtrip_bridge`);
+  const sourcePath = path.join(bridgePath, 'source');
+  const editPath = path.join(bridgePath, 'edit');
+  const outPath = path.join(bridgePath, 'out');
+  const scriptsPath = path.join(bridgePath, 'scripts');
+
+  await fs.mkdir(sourcePath, { recursive: true });
+  await fs.mkdir(editPath, { recursive: true });
+  await fs.mkdir(outPath, { recursive: true });
+  await fs.mkdir(scriptsPath, { recursive: true });
+  await fs.copyFile(path.resolve(dffPath), path.join(sourcePath, `${baseName}.dff`));
+  if (txdPath && canReadPath(txdPath)) {
+    await fs.copyFile(path.resolve(txdPath), path.join(sourcePath, `${baseName}.txd`));
+  }
+  if (glbBytes) {
+    await fs.writeFile(path.join(editPath, `${baseName}.glb`), bytesToBuffer(glbBytes));
+  }
+
+  const sourceDff = path.join(sourcePath, `${baseName}.dff`);
+  const outputDff = path.join(outPath, `${baseName}_exported.dff`);
+  const editedGlb = path.join(editPath, `${baseName}.glb`);
+  const maxScript = `-- Skin Viewer DFF Roundtrip Bridge\n-- Requires GTA Tools / Kam compatible scripts loaded from gtaToolsRoot.\n\ngtaToolsRoot = "${escapeMaxScriptString(toolsRoot)}"\nsourceDff = "${escapeMaxScriptString(sourceDff)}"\noutputDff = "${escapeMaxScriptString(outputDff)}"\nreferenceGlb = "${escapeMaxScriptString(editedGlb)}"\n\nfn bridgeFileIn relativePath = (\n    local scriptPath = gtaToolsRoot + "\\\\" + relativePath\n    if doesFileExist scriptPath then fileIn scriptPath else format "Missing: %\\n" scriptPath\n)\n\nfn loadGtaToolsBridge = (\n    bridgeFileIn "Startup\\\\GTA_Material.ms"\n    bridgeFileIn "Startup\\\\GTA_COLplugin.ms"\n    bridgeFileIn "GTA_Tools\\\\DFFimp.ms"\n    bridgeFileIn "GTA_Tools\\\\DFFexp.ms"\n    bridgeFileIn "GTA_Tools\\\\GTA_DFF_IO.ms"\n)\n\nfn bridgeImportDff = (\n    resetMaxFile #noPrompt\n    loadGtaToolsBridge()\n    local f = fopen sourceDff "rb"\n    if f == undefined then throw ("Cannot open DFF: " + sourceDff)\n    DFFin f 1.0 3 ".png" 0.1 true true (getFilenameFile sourceDff)\n    fclose f\n    max select all\n    format "Imported DFF: %\\n" sourceDff\n)\n\nfn bridgeImportReferenceGlb = (\n    if doesFileExist referenceGlb then (\n        try (importFile referenceGlb #noPrompt) catch (messageBox "3ds Max could not import GLB automatically. Import it manually from edit folder." title:"GLB import")\n    ) else messageBox "No GLB reference was generated." title:"GLB reference"\n)\n\nfn bridgeExportDff = (\n    loadGtaToolsBridge()\n    local exportObjects = for obj in objects where not obj.isHidden collect obj\n    if exportObjects.count == 0 then throw "No scene objects to export."\n    local f = fopen outputDff "wb"\n    if f == undefined then throw ("Cannot write DFF: " + outputDff)\n    global newHierarchyArr = #()\n    hierarchyReSort exportObjects\n    local allObjects = newHierarchyArr\n    DFFout f allObjects false true true true 1.0 0x1803FFFF undefined true false\n    fclose f\n    format "Exported DFF: %\\n" outputDff\n    shellLaunch (getFilenamePath outputDff) ""\n)\n\nrollout SkinViewerBridge "Skin Viewer DFF Bridge" width:260\n(\n    label l1 "1. Import original DFF"\n    button bImport "Import DFF via GTA Tools" width:220\n    label l2 "2. Optional: import GLB reference"\n    button bGlb "Import GLB reference" width:220\n    label l3 "3. Export scene back to DFF"\n    button bExport "Export DFF via GTA Tools" width:220\n    on bImport pressed do bridgeImportDff()\n    on bGlb pressed do bridgeImportReferenceGlb()\n    on bExport pressed do bridgeExportDff()\n)\n\ncreateDialog SkinViewerBridge\n`;
+
+  const blenderScript = `import bpy\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\nEDIT = ROOT / "edit"\nGLB = EDIT / "${baseName}.glb"\n\nbpy.ops.object.select_all(action="SELECT")\nbpy.ops.object.delete()\nif GLB.exists():\n    bpy.ops.import_scene.gltf(filepath=str(GLB))\nelse:\n    print(f"Missing GLB: {GLB}")\n\nprint("Edit the reference model, then export GLB if you want to use it as a visual reference in 3ds Max.")\n`;
+
+  const readme = [
+    'Skin Viewer DFF Roundtrip Bridge',
+    '',
+    'What this package does:',
+    '- Uses the real GTA Tools MaxScript DFFin/DFFout functions for RenderWare DFF import/export.',
+    '- Provides a GLB reference for Blender editing/inspection.',
+    '- Keeps original DFF/TXD in source/ and writes exported DFF to out/.',
+    '',
+    '3ds Max:',
+    '1. Open 3ds Max.',
+    '2. Run scripts/skin_viewer_dff_bridge.ms.',
+    '3. Click "Import DFF via GTA Tools".',
+    '4. Edit/repair the model in 3ds Max.',
+    '5. Click "Export DFF via GTA Tools".',
+    '',
+    'Blender:',
+    '1. Run scripts/blender_open_reference.py from Blender.',
+    '2. Use the GLB as visual/reference geometry.',
+    '3. For final DFF, use 3ds Max + GTA Tools export path above.',
+    '',
+    `GTA Tools root used by MaxScript: ${toolsRoot || 'SET gtaToolsRoot INSIDE THE SCRIPT'}`
+  ].join('\n');
+
+  await fs.writeFile(path.join(scriptsPath, 'skin_viewer_dff_bridge.ms'), maxScript, 'utf8');
+  await fs.writeFile(path.join(scriptsPath, 'blender_open_reference.py'), blenderScript, 'utf8');
+  await fs.writeFile(path.join(bridgePath, 'README.txt'), readme, 'utf8');
+
+  return {
+    bridgePath,
+    maxScriptPath: path.join(scriptsPath, 'skin_viewer_dff_bridge.ms'),
+    outputDff
+  };
+});
+
+ipcMain.handle('mta:createSkinResource', async (event, { dffPath, txdPath, displayName, pedId }) => {
+  if (!dffPath || !canReadPath(dffPath)) {
+    throw new Error('El DFF esta fuera de la carpeta seleccionada.');
+  }
+
+  if (!txdPath || !canReadPath(txdPath)) {
+    throw new Error('El TXD esta fuera de la carpeta seleccionada.');
+  }
+
+  const numericPedId = Number.parseInt(pedId, 10);
+  if (!Number.isInteger(numericPedId) || numericPedId < 0 || numericPedId > 312) {
+    throw new Error('El ID de ped debe estar entre 0 y 312.');
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Elegir carpeta para recurso MTA',
+    properties: ['openDirectory', 'createDirectory']
+  };
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const baseName = sanitizeFileName(displayName || path.basename(dffPath, path.extname(dffPath)), 'skin');
+  const resourceName = `mta_skin_${baseName.replace(/\s+/g, '_')}`;
+  const resourcePath = path.join(result.filePaths[0], resourceName);
+  const modelBaseName = baseName.replace(/\s+/g, '_');
+  const dffDestName = `${modelBaseName}.dff`;
+  const txdDestName = `${modelBaseName}.txd`;
+
+  await fs.mkdir(resourcePath, { recursive: true });
+  await fs.copyFile(path.resolve(dffPath), path.join(resourcePath, dffDestName));
+  await fs.copyFile(path.resolve(txdPath), path.join(resourcePath, txdDestName));
+
+  const metaXml = `<?xml version="1.0" encoding="UTF-8"?>\n<meta>\n  <info author="Tokyo tears" name="${escapeXml(resourceName)}" type="script" version="1.0.0" />\n  <script src="client.lua" type="client" />\n  <file src="${escapeXml(txdDestName)}" />\n  <file src="${escapeXml(dffDestName)}" />\n</meta>\n`;
+  const clientLua = `local pedId = ${numericPedId}\nlocal txd = engineLoadTXD("${sanitizeLuaString(txdDestName)}")\nif txd then\n    engineImportTXD(txd, pedId)\nend\n\nlocal dff = engineLoadDFF("${sanitizeLuaString(dffDestName)}", pedId)\nif dff then\n    engineReplaceModel(dff, pedId)\nend\n`;
+
+  await fs.writeFile(path.join(resourcePath, 'meta.xml'), metaXml, 'utf8');
+  await fs.writeFile(path.join(resourcePath, 'client.lua'), clientLua, 'utf8');
+
+  return {
+    resourcePath,
+    pedId: numericPedId,
+    dffPath: path.join(resourcePath, dffDestName),
+    txdPath: path.join(resourcePath, txdDestName)
+  };
+});
+
+ipcMain.handle('mta:createBatchResource', async (event, { models, startPedId }) => {
+  const usableModels = Array.isArray(models)
+    ? models.filter((model) => model?.dffPath && model?.txdPath && canReadPath(model.dffPath) && canReadPath(model.txdPath))
+    : [];
+
+  if (usableModels.length === 0) {
+    throw new Error('No hay skins con DFF/TXD para crear el resource MTA.');
+  }
+
+  const firstPedId = Number.parseInt(startPedId, 10);
+  if (!Number.isInteger(firstPedId) || firstPedId < 0 || firstPedId > 312) {
+    throw new Error('El ID inicial debe estar entre 0 y 312.');
+  }
+
+  if (firstPedId + usableModels.length - 1 > 312) {
+    throw new Error('El lote excede el limite de Ped ID 312.');
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: 'Elegir carpeta para resource MTA por lote',
+    properties: ['openDirectory', 'createDirectory']
+  };
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const resourcePath = path.join(result.filePaths[0], `mta_skin_pack_${timestampForFile()}`);
+  await fs.mkdir(resourcePath, { recursive: true });
+
+  const scriptLines = [];
+  const metaFiles = [];
+  usableModels.forEach((model, index) => {
+    const pedId = firstPedId + index;
+    const baseName = sanitizeFileName(model.displayName || `skin_${pedId}`, `skin_${pedId}`).replace(/\s+/g, '_');
+    const dffName = `${baseName}.dff`;
+    const txdName = `${baseName}.txd`;
+    metaFiles.push(`  <file src="${escapeXml(txdName)}" />`, `  <file src="${escapeXml(dffName)}" />`);
+    scriptLines.push(
+      `do`,
+      `    local pedId = ${pedId}`,
+      `    local txd = engineLoadTXD("${sanitizeLuaString(txdName)}")`,
+      `    if txd then engineImportTXD(txd, pedId) end`,
+      `    local dff = engineLoadDFF("${sanitizeLuaString(dffName)}", pedId)`,
+      `    if dff then engineReplaceModel(dff, pedId) end`,
+      `end`,
+      ``
+    );
+  });
+
+  for (let index = 0; index < usableModels.length; index += 1) {
+    const model = usableModels[index];
+    const pedId = firstPedId + index;
+    const baseName = sanitizeFileName(model.displayName || `skin_${pedId}`, `skin_${pedId}`).replace(/\s+/g, '_');
+    await fs.copyFile(path.resolve(model.dffPath), path.join(resourcePath, `${baseName}.dff`));
+    await fs.copyFile(path.resolve(model.txdPath), path.join(resourcePath, `${baseName}.txd`));
+  }
+
+  const metaXml = `<?xml version="1.0" encoding="UTF-8"?>\n<meta>\n  <info author="Tokyo tears" name="mta_skin_pack" type="script" version="1.0.0" />\n  <script src="client.lua" type="client" />\n${metaFiles.join('\n')}\n</meta>\n`;
+  await fs.writeFile(path.join(resourcePath, 'meta.xml'), metaXml, 'utf8');
+  await fs.writeFile(path.join(resourcePath, 'client.lua'), scriptLines.join('\n'), 'utf8');
+
+  return {
+    resourcePath,
+    count: usableModels.length,
+    startPedId: firstPedId
   };
 });
 

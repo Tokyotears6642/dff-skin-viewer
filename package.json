@@ -1,6 +1,6 @@
 {
   "name": "dff-skin-viewer",
-  "version": "0.1.1",
+  "version": "0.7.0",
   "description": "Skin Viewer by Tokyo tears for GTA RenderWare DFF models with TXD textures.",
   "author": "Tokyo tears",
   "main": "electron/main.cjs",
