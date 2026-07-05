@@ -1,4 +1,4 @@
-# Skin Viewer by Tokyo tears
+# Skin Viewer
 
 Visualizador y editor ligero para skins RenderWare de GTA/SAMP. Permite abrir una carpeta con archivos `.dff` y `.txd`, ver el modelo en 3D, inspeccionar materiales/texturas, reemplazar texturas del TXD y guardar una copia actualizada con backup automático.
 
